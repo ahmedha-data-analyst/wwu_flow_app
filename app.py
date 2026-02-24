@@ -304,7 +304,7 @@ st.markdown(
 # ======================================================
 # DATA LOADING
 # ======================================================
-@st.cache_data
+@st.cache_data(max_entries=1)
 def load_location(name):
     meta = LOCATIONS[name]
     df_local = pd.read_parquet(meta["file"])
@@ -407,6 +407,40 @@ def thin_time_series(dataframe, max_points=50000):
         return dataframe, 1
     step = (len(dataframe) + max_points - 1) // max_points
     return dataframe.iloc[::step], step
+
+
+def select_time_focus(dataframe, key_prefix):
+    """Simple period focus selector for trend charts."""
+    focus_mode = st.selectbox(
+        "Period to view",
+        options=["All selected dates", "One year", "One month", "One day"],
+        key=f"{key_prefix}_focus_mode",
+    )
+    if dataframe.empty or focus_mode == "All selected dates":
+        return dataframe, "Showing all selected dates."
+
+    years = sorted(dataframe.index.year.unique())
+    year = st.selectbox("Year", options=years, index=len(years) - 1, key=f"{key_prefix}_year")
+    year_df = dataframe[dataframe.index.year == year]
+    if focus_mode == "One year":
+        return year_df, f"Showing {year}."
+
+    month_opts = sorted(year_df.index.month.unique())
+    month = st.selectbox(
+        "Month",
+        options=month_opts,
+        format_func=lambda m: pd.Timestamp(year=2000, month=int(m), day=1).strftime("%B"),
+        key=f"{key_prefix}_month",
+    )
+    month_df = year_df[year_df.index.month == month]
+    month_name = pd.Timestamp(year=2000, month=int(month), day=1).strftime("%B")
+    if focus_mode == "One month":
+        return month_df, f"Showing {month_name} {year}."
+
+    day_opts = sorted(month_df.index.day.unique())
+    day = st.selectbox("Day", options=day_opts, key=f"{key_prefix}_day")
+    day_df = month_df[month_df.index.day == day]
+    return day_df, f"Showing {year}-{int(month):02d}-{int(day):02d}."
 
 
 if is_compare:
@@ -717,15 +751,6 @@ FREQ_MAP = {
     "Weekly": "W",
     "Monthly": "M",
 }
-ROLLING_WINDOW_MAP = {
-    "1min": 1440,
-    "15min": 96,
-    "30min": 48,
-    "Hourly": 24,
-    "Daily": 7,
-    "Weekly": 4,
-    "Monthly": 3,
-}
 
 
 # ##########################################################################
@@ -775,28 +800,27 @@ if is_compare:
 
     ctrl1, ctrl2 = st.columns(2)
     with ctrl1:
+        trend_base, focus_caption = select_time_focus(compare_df, key_prefix="cmp_trend")
+    with ctrl2:
         agg_choice = st.selectbox(
-            "Time resolution",
+            "Data granularity",
             options=list(FREQ_MAP.keys()),
             index=list(FREQ_MAP.keys()).index("Daily"),
         )
-    with ctrl2:
-        smooth_trend = st.checkbox("Smooth trend", value=True)
+    if trend_base.empty:
+        st.info("No data in this period. Pick a different year/month/day.")
+        st.stop()
 
-    resampled = compare_df.resample(FREQ_MAP[agg_choice]).mean().dropna(how="all")
+    resampled = trend_base.resample(FREQ_MAP[agg_choice]).mean().dropna(how="all")
     raw_points = len(resampled)
     resampled, thin_step = thin_time_series(resampled)
-    if smooth_trend:
-        smooth_window = max(1, ROLLING_WINDOW_MAP[agg_choice] // thin_step)
-        resampled = resampled.rolling(window=smooth_window, min_periods=1).median()
 
     fig_trend = build_comparison_chart(
         resampled,
         f"Flow Comparison – {agg_choice.lower()} averages",
         "Time",
     )
-    if smooth_trend:
-        st.caption("Smoothed trend is on (rolling median).")
+    st.caption(focus_caption)
     if thin_step > 1:
         st.caption(
             f"To keep things fast, this chart shows {len(resampled):,} of {raw_points:,} points."
@@ -960,19 +984,22 @@ else:
 
     ctrl_a, ctrl_b, ctrl_c = st.columns(3)
     with ctrl_a:
+        trend_base, focus_caption = select_time_focus(loc_df, key_prefix=f"{view_mode}_trend")
+    with ctrl_b:
         agg_choice = st.selectbox(
-            "Time resolution",
+            "Data granularity",
             options=list(FREQ_MAP.keys()),
             index=list(FREQ_MAP.keys()).index("Daily"),
         )
-    with ctrl_b:
+    with ctrl_c:
         trend_view = st.selectbox(
             "Comparison view",
             options=["Separated (actual units)", "Normalized (0-1)"],
             index=0,
         )
-    with ctrl_c:
-        smooth_trend = st.checkbox("Smooth trend", value=True)
+    if trend_base.empty:
+        st.info("No data in this period. Pick a different year/month/day.")
+        st.stop()
 
     # Flow unit toggle only for Great Hele (Scmh native)
     flow_unit = loc_meta["flow_unit"]
@@ -985,13 +1012,10 @@ else:
         )
 
     freq = FREQ_MAP[agg_choice]
-    resampled = loc_df.resample(freq).mean().dropna(how="all")
+    resampled = trend_base.resample(freq).mean().dropna(how="all")
     plot_data = resampled.copy()
     raw_points = len(plot_data)
     plot_data, thin_step = thin_time_series(plot_data)
-    if smooth_trend:
-        smooth_window = max(1, ROLLING_WINDOW_MAP[agg_choice] // thin_step)
-        plot_data = plot_data.rolling(window=smooth_window, min_periods=1).median()
 
     flow_cols, pressure_cols, other_cols = split_series_columns(plot_data.columns)
 
@@ -1071,8 +1095,7 @@ else:
         )
         st.caption("Each series is scaled independently to 0-1 for shape comparison.")
 
-    if smooth_trend:
-        st.caption("Smoothed trend is on (rolling median).")
+    st.caption(focus_caption)
     if thin_step > 1:
         st.caption(
             f"To keep things fast, this chart shows {len(plot_data):,} of {raw_points:,} points."
