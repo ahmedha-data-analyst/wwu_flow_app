@@ -17,6 +17,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+st.set_option("client.toolbarMode", "viewer")
 
 
 # ------------------------------------------------------
@@ -225,12 +226,15 @@ st.markdown(
         box-sizing: border-box;
     }}
     .stPlotlyChart .js-plotly-plot .plotly .modebar {{
-        right: 0.45rem !important;
+        right: 2.8rem !important;
     }}
     div[data-testid="stElementContainer"] > div[data-testid="stElementToolbar"] {{
         top: 0.35rem !important;
         right: 0.45rem !important;
         z-index: 30 !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
     }}
     .hero-banner {{
         display: flex;
@@ -313,6 +317,9 @@ def load_location(name):
         else:
             df_local.index = pd.to_datetime(df_local.index, utc=True)
     df_local = df_local.sort_index()
+    float_cols = df_local.select_dtypes(include=["float64"]).columns
+    if len(float_cols) > 0:
+        df_local[float_cols] = df_local[float_cols].astype("float32")
     return df_local
 
 
@@ -324,7 +331,7 @@ def build_comparison_df():
         raw = load_location(name)
         series = raw[meta["compare_col"]] * meta["compare_scale"]
         frames[name] = series
-    return pd.DataFrame(frames)
+    return pd.DataFrame(frames).astype("float32")
 
 
 all_data = {name: load_location(name) for name in LOCATIONS}
@@ -378,6 +385,14 @@ start_date, end_date = st.sidebar.slider(
 def filter_by_date(dataframe, start, end):
     mask = (dataframe.index.date >= start) & (dataframe.index.date <= end)
     return dataframe.loc[mask]
+
+
+def thin_time_series(dataframe, max_points=80000):
+    """Downsample very dense trend charts to keep Plotly responsive."""
+    if len(dataframe) <= max_points:
+        return dataframe, 1
+    step = (len(dataframe) + max_points - 1) // max_points
+    return dataframe.iloc[::step], step
 
 
 if is_compare:
@@ -756,6 +771,8 @@ if is_compare:
         resampled = resampled.rolling(
             window=ROLLING_WINDOW_MAP[agg_choice], min_periods=1
         ).median()
+    raw_points = len(resampled)
+    resampled, thin_step = thin_time_series(resampled)
 
     fig_trend = build_comparison_chart(
         resampled,
@@ -765,6 +782,11 @@ if is_compare:
     if smooth_trend:
         st.caption(
             f"Smoothed with rolling median ({ROLLING_WINDOW_MAP[agg_choice]} points)."
+        )
+    if thin_step > 1:
+        st.caption(
+            f"Downsampled for stability: {len(resampled):,} of {raw_points:,} points "
+            f"(every {thin_step}th point)."
         )
     st.plotly_chart(fig_trend, use_container_width=True)
 
@@ -956,6 +978,8 @@ else:
         plot_data = plot_data.rolling(
             window=ROLLING_WINDOW_MAP[agg_choice], min_periods=1
         ).median()
+    raw_points = len(plot_data)
+    plot_data, thin_step = thin_time_series(plot_data)
 
     flow_cols, pressure_cols, other_cols = split_series_columns(plot_data.columns)
 
@@ -1038,6 +1062,11 @@ else:
     if smooth_trend:
         st.caption(
             f"Smoothed with rolling median ({ROLLING_WINDOW_MAP[agg_choice]} points)."
+        )
+    if thin_step > 1:
+        st.caption(
+            f"Downsampled for stability: {len(plot_data):,} of {raw_points:,} points "
+            f"(every {thin_step}th point)."
         )
     st.plotly_chart(fig_trend, use_container_width=True)
 
