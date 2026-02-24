@@ -126,6 +126,7 @@ st.markdown(
 
     html, body, [class*="css"] {{
         font-family: 'Hind', sans-serif;
+        overflow-x: hidden;
     }}
 
     .stApp {{
@@ -223,10 +224,10 @@ st.markdown(
         padding: 0.55rem 1.45rem 0.25rem 0.55rem;
         margin-bottom: 1.1rem;
         box-sizing: border-box;
-        overflow: visible;
+        overflow: hidden;
     }}
     .stPlotlyChart > div {{
-        overflow: visible !important;
+        overflow: hidden !important;
     }}
     .stPlotlyChart .js-plotly-plot .plotly .modebar {{
         right: 0.45rem !important;
