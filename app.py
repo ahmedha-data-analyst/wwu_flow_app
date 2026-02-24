@@ -126,7 +126,6 @@ st.markdown(
 
     html, body, [class*="css"] {{
         font-family: 'Hind', sans-serif;
-        overflow-x: hidden;
     }}
 
     .stApp {{
@@ -224,16 +223,14 @@ st.markdown(
         padding: 0.55rem 1.45rem 0.25rem 0.55rem;
         margin-bottom: 1.1rem;
         box-sizing: border-box;
-        overflow: hidden;
-    }}
-    .stPlotlyChart > div {{
-        overflow: hidden !important;
     }}
     .stPlotlyChart .js-plotly-plot .plotly .modebar {{
         right: 0.45rem !important;
     }}
-    [data-testid="stElementToolbar"] {{
+    div[data-testid="stElementContainer"] > div[data-testid="stElementToolbar"] {{
+        top: 0.35rem !important;
         right: 0.45rem !important;
+        z-index: 30 !important;
     }}
     .hero-banner {{
         display: flex;
@@ -475,12 +472,13 @@ def apply_dark_layout(fig, title):
         colorway=[PRIMARY_COLOUR, SECONDARY_COLOUR, ACCENT_COLOUR, "#f59e0b", "#e11d48"],
         legend=dict(
             bgcolor="rgba(0,0,0,0)",
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            x=0,
+            orientation="v",
+            yanchor="top",
+            y=1.0,
+            xanchor="left",
+            x=1.01,
         ),
-        margin=dict(l=66, r=72, t=78, b=62),
+        margin=dict(l=66, r=220, t=78, b=62),
         hovermode="x unified",
     )
     fig.update_xaxes(
