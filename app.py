@@ -223,6 +223,16 @@ st.markdown(
         padding: 0.55rem 1.45rem 0.25rem 0.55rem;
         margin-bottom: 1.1rem;
         box-sizing: border-box;
+        overflow: visible;
+    }}
+    .stPlotlyChart > div {{
+        overflow: visible !important;
+    }}
+    .stPlotlyChart .js-plotly-plot .plotly .modebar {{
+        right: 0.45rem !important;
+    }}
+    [data-testid="stElementToolbar"] {{
+        right: 0.45rem !important;
     }}
     .hero-banner {{
         display: flex;
@@ -671,16 +681,22 @@ st.caption('Select a location from the sidebar to explore it individually, or st
 # FREQUENCY / RESOLUTION HELPERS
 # ======================================================
 FREQ_MAP = {
-    "30 minutes": "30min",
+    "1min": "1min",
+    "15min": "15min",
+    "30min": "30min",
     "Hourly": "H",
     "Daily": "D",
     "Weekly": "W",
+    "Monthly": "M",
 }
 ROLLING_WINDOW_MAP = {
-    "30 minutes": 48,
+    "1min": 1440,
+    "15min": 96,
+    "30min": 48,
     "Hourly": 24,
     "Daily": 7,
     "Weekly": 4,
+    "Monthly": 3,
 }
 
 
@@ -731,12 +747,12 @@ if is_compare:
         agg_choice = st.selectbox(
             "Time resolution",
             options=list(FREQ_MAP.keys()),
-            index=2,
+            index=list(FREQ_MAP.keys()).index("Daily"),
         )
     with ctrl2:
         smooth_trend = st.checkbox("Smooth trend", value=True)
 
-    resampled = compare_df.resample(FREQ_MAP[agg_choice]).mean()
+    resampled = compare_df.resample(FREQ_MAP[agg_choice]).mean().dropna(how="all")
     if smooth_trend:
         resampled = resampled.rolling(
             window=ROLLING_WINDOW_MAP[agg_choice], min_periods=1
@@ -913,7 +929,7 @@ else:
         agg_choice = st.selectbox(
             "Time resolution",
             options=list(FREQ_MAP.keys()),
-            index=2,
+            index=list(FREQ_MAP.keys()).index("Daily"),
         )
     with ctrl_b:
         trend_view = st.selectbox(
@@ -935,7 +951,7 @@ else:
         )
 
     freq = FREQ_MAP[agg_choice]
-    resampled = loc_df.resample(freq).mean()
+    resampled = loc_df.resample(freq).mean().dropna(how="all")
     plot_data = resampled.copy()
     if smooth_trend:
         plot_data = plot_data.rolling(
