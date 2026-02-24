@@ -324,17 +324,31 @@ def load_location(name):
 
 
 @st.cache_data
+def load_compare_series(name):
+    """Load only one representative flow series per location (Kscmh)."""
+    meta = LOCATIONS[name]
+    df_small = pd.read_parquet(meta["file"], columns=[meta["compare_col"]])
+    if not isinstance(df_small.index, pd.DatetimeIndex):
+        for col in ["Time", "Datetime", "timestamp"]:
+            if col in df_small.columns:
+                df_small[col] = pd.to_datetime(df_small[col], utc=True)
+                df_small = df_small.set_index(col)
+                break
+        else:
+            df_small.index = pd.to_datetime(df_small.index, utc=True)
+    series = (df_small[meta["compare_col"]] * meta["compare_scale"]).astype("float32")
+    return series.sort_index()
+
+
+@st.cache_data
 def build_comparison_df():
     """Build a single DataFrame with one flow column per location, all in Kscmh."""
     frames = {}
     for name, meta in LOCATIONS.items():
-        raw = load_location(name)
-        series = raw[meta["compare_col"]] * meta["compare_scale"]
-        frames[name] = series
+        frames[name] = load_compare_series(name)
     return pd.DataFrame(frames).astype("float32")
 
 
-all_data = {name: load_location(name) for name in LOCATIONS}
 compare_df_full = build_comparison_df()
 
 
@@ -362,10 +376,10 @@ st.sidebar.markdown("---")
 # SIDEBAR – DATE RANGE (context-dependent)
 # ======================================================
 if is_compare:
-    global_min = min(d.index.min().date() for d in all_data.values())
-    global_max = max(d.index.max().date() for d in all_data.values())
+    global_min = compare_df_full.index.min().date()
+    global_max = compare_df_full.index.max().date()
 else:
-    loc_df_raw = all_data[view_mode]
+    loc_df_raw = load_location(view_mode)
     global_min = loc_df_raw.index.min().date()
     global_max = loc_df_raw.index.max().date()
 
@@ -387,7 +401,7 @@ def filter_by_date(dataframe, start, end):
     return dataframe.loc[mask]
 
 
-def thin_time_series(dataframe, max_points=80000):
+def thin_time_series(dataframe, max_points=50000):
     """Downsample very dense trend charts to keep Plotly responsive."""
     if len(dataframe) <= max_points:
         return dataframe, 1
@@ -397,10 +411,11 @@ def thin_time_series(dataframe, max_points=80000):
 
 if is_compare:
     compare_df = filter_by_date(compare_df_full, start_date, end_date).dropna(how="all")
-    # Also filter individual data for stats
-    filtered_data = {n: filter_by_date(d, start_date, end_date) for n, d in all_data.items()}
 else:
-    loc_df = filter_by_date(all_data[view_mode], start_date, end_date)
+    loc_df = filter_by_date(loc_df_raw, start_date, end_date)
+    if loc_df.empty:
+        st.warning("No data in the selected date range. Expand the date range to continue.")
+        st.stop()
     # Series selector for individual mode
     all_cols = list(loc_df.columns)
     selected_cols = st.sidebar.multiselect(
@@ -416,7 +431,7 @@ else:
 
 # Sidebar record count
 if is_compare:
-    total_recs = sum(len(d) for d in filtered_data.values())
+    total_recs = int(compare_df.notna().sum().sum())
     st.sidebar.markdown(
         f"<p style='color:{SUBTEXT_COL}; font-size:0.9rem;'>"
         f"Total records across all locations: "
@@ -487,13 +502,12 @@ def apply_dark_layout(fig, title):
         colorway=[PRIMARY_COLOUR, SECONDARY_COLOUR, ACCENT_COLOUR, "#f59e0b", "#e11d48"],
         legend=dict(
             bgcolor="rgba(0,0,0,0)",
-            orientation="v",
-            yanchor="top",
-            y=1.0,
-            xanchor="left",
-            x=1.01,
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            x=0,
         ),
-        margin=dict(l=66, r=220, t=78, b=62),
+        margin=dict(l=66, r=72, t=78, b=62),
         hovermode="x unified",
     )
     fig.update_xaxes(
@@ -727,10 +741,13 @@ if is_compare:
 
     mcols = st.columns(4)
     for i, name in enumerate(LOCATIONS):
-        d = filtered_data[name]
+        d = compare_df[name].dropna() if name in compare_df.columns else pd.Series(dtype="float32")
         with mcols[i]:
             st.metric(name, f"{len(d):,} records")
-            st.caption(f"{d.index.min().date()} → {d.index.max().date()}")
+            if len(d) > 0:
+                st.caption(f"{d.index.min().date()} → {d.index.max().date()}")
+            else:
+                st.caption("No data in selected range")
 
     st.markdown("#### Descriptive statistics (flow in Kscmh)")
     desc = compare_df.describe().T
@@ -767,12 +784,11 @@ if is_compare:
         smooth_trend = st.checkbox("Smooth trend", value=True)
 
     resampled = compare_df.resample(FREQ_MAP[agg_choice]).mean().dropna(how="all")
-    if smooth_trend:
-        resampled = resampled.rolling(
-            window=ROLLING_WINDOW_MAP[agg_choice], min_periods=1
-        ).median()
     raw_points = len(resampled)
     resampled, thin_step = thin_time_series(resampled)
+    if smooth_trend:
+        smooth_window = max(1, ROLLING_WINDOW_MAP[agg_choice] // thin_step)
+        resampled = resampled.rolling(window=smooth_window, min_periods=1).median()
 
     fig_trend = build_comparison_chart(
         resampled,
@@ -780,13 +796,10 @@ if is_compare:
         "Time",
     )
     if smooth_trend:
-        st.caption(
-            f"Smoothed with rolling median ({ROLLING_WINDOW_MAP[agg_choice]} points)."
-        )
+        st.caption("Smoothed trend is on (rolling median).")
     if thin_step > 1:
         st.caption(
-            f"Downsampled for stability: {len(resampled):,} of {raw_points:,} points "
-            f"(every {thin_step}th point)."
+            f"To keep things fast, this chart shows {len(resampled):,} of {raw_points:,} points."
         )
     st.plotly_chart(fig_trend, use_container_width=True)
 
@@ -974,12 +987,11 @@ else:
     freq = FREQ_MAP[agg_choice]
     resampled = loc_df.resample(freq).mean().dropna(how="all")
     plot_data = resampled.copy()
-    if smooth_trend:
-        plot_data = plot_data.rolling(
-            window=ROLLING_WINDOW_MAP[agg_choice], min_periods=1
-        ).median()
     raw_points = len(plot_data)
     plot_data, thin_step = thin_time_series(plot_data)
+    if smooth_trend:
+        smooth_window = max(1, ROLLING_WINDOW_MAP[agg_choice] // thin_step)
+        plot_data = plot_data.rolling(window=smooth_window, min_periods=1).median()
 
     flow_cols, pressure_cols, other_cols = split_series_columns(plot_data.columns)
 
@@ -1060,13 +1072,10 @@ else:
         st.caption("Each series is scaled independently to 0-1 for shape comparison.")
 
     if smooth_trend:
-        st.caption(
-            f"Smoothed with rolling median ({ROLLING_WINDOW_MAP[agg_choice]} points)."
-        )
+        st.caption("Smoothed trend is on (rolling median).")
     if thin_step > 1:
         st.caption(
-            f"Downsampled for stability: {len(plot_data):,} of {raw_points:,} points "
-            f"(every {thin_step}th point)."
+            f"To keep things fast, this chart shows {len(plot_data):,} of {raw_points:,} points."
         )
     st.plotly_chart(fig_trend, use_container_width=True)
 
